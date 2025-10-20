@@ -1,6 +1,7 @@
 # example_data.py
 
 STANDARD_SEGMENTS = ["HR", "Finance", "IT", "Production", "Guest"]
+
 STANDARD_SERVICES = {
     "HTTP": 80,
     "HTTPS": 443,
@@ -11,8 +12,9 @@ STANDARD_SERVICES = {
     "LDAP": 389,
     "Custom": None
 }
+
 STANDARD_EQUIPMENT = [
     "Firewall", "Router", "Switch", "Server", "Workstation",
-    "Printer", "Wireless AP", "NAS"
+    "Printer", "NAS", "IoT Device", "Load Balancer"
 ]
 

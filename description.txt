@@ -24,3 +24,5 @@ network_segmentation_tool/
 pip install matplotlib networkx
 pip install pyinstaller
 pyinstaller --onefile --windowed --noconfirm main.py
+
+pyinstaller --onefile --windowed --noconfirm invest_calculator.py
