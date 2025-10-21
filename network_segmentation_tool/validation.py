@@ -13,7 +13,6 @@ def validate_subnets(subnets):
         except ValueError:
             errors.append(f"Некорректный CIDR для сегмента '{name}': {cidr}")
 
-    # Проверка пересечений
     for i in range(len(net_objects)):
         for j in range(i + 1, len(net_objects)):
             if net_objects[i][1].overlaps(net_objects[j][1]):
@@ -36,11 +35,10 @@ def validate_rules(rules, all_segments):
 
 def validate_user_rules(user_rules, all_segments):
     errors = []
-    for rule in user_rules:
-        seg, fio, pos, src, dst, svc = rule
+    for seg, fio, pos, target_seg, svc in user_rules:
         if seg not in all_segments:
             errors.append(f"Пользователь '{fio}': сегмент '{seg}' не объявлен")
-        if src not in all_segments or dst not in all_segments:
-            errors.append(f"Пользователь '{fio}': недопустимое взаимодействие {src} → {dst}")
+        if target_seg not in all_segments:
+            errors.append(f"Пользователь '{fio}': недопустимый целевой сегмент '{target_seg}'")
     return errors if errors else None
 

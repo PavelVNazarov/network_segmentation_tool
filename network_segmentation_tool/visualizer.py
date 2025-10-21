@@ -5,13 +5,16 @@ from tkinter import filedialog
 import tkinter as tk
 
 def draw_and_save_network(segments, global_rules, user_rules, segment_equipment, parent_window=None):
+    if not segments:
+        raise ValueError("Нет сегментов для отображения")
+
     G = nx.DiGraph()
 
-    # Узлы: сегменты
+    # Сегменты
     for seg in segments:
         G.add_node(seg, type='segment')
 
-    # Узлы: оборудование (привязано к сегментам)
+    # Оборудование
     equipment_nodes = []
     for seg in segments:
         eq_dict = segment_equipment.get(seg, {})
@@ -22,50 +25,46 @@ def draw_and_save_network(segments, global_rules, user_rules, segment_equipment,
                 equipment_nodes.append(node_name)
                 G.add_edge(node_name, seg, style='dotted', color='gray')
 
-    # Узлы: пользователи
+    # Пользователи
     user_nodes = []
-    for seg, fio, pos, src, dst, svc in user_rules:
-        user_id = f"{fio} ({seg})"
-        G.add_node(user_id, type='user', segment=seg)
-        user_nodes.append((user_id, seg, src, dst, svc))
+    for seg, fio, pos, target, svc in user_rules:
+        user_id = f"{fio}\n({seg})"
+        G.add_node(user_id, type='user', segment=seg, target=target, service=svc)
+        user_nodes.append((user_id, seg, target, svc))
 
-    # Рёбра: глобальные правила
+    # Глобальные правила
     for _, src, dst, svc in global_rules:
         G.add_edge(src, dst, label=svc, rule_type='global')
 
-    # Рёбра: пользовательские правила
-    for user_id, seg, src, dst, svc in user_nodes:
-        G.add_edge(src, dst, label=f"{svc}\n({seg})", style='dashed', color='blue')
+    # Пользовательские правила (от пользователя к целевому сегменту)
+    for user_id, seg, target, svc in user_nodes:
+        G.add_edge(seg, target, label=f"{svc}\n({seg})", style='dashed', color='blue')
 
-    # Позиционирование
+    # Позиции
     pos = {}
-
-    # Сегменты по кругу
     if segments:
-        seg_layout = nx.circular_layout(segments, scale=2.0)
+        seg_layout = nx.circular_layout(segments, scale=2.5)
         for seg in segments:
             pos[seg] = seg_layout[seg]
 
-    # Оборудование — рядом с сегментом
+    # Оборудование рядом с сегментом
     for node in equipment_nodes:
         seg = G.nodes[node].get('segment')
         if seg in pos:
             base_x, base_y = pos[seg]
-            idx = equipment_nodes.index(node) % 5
-            offset = 0.4
-            pos[node] = (base_x + offset * (idx - 2), base_y - 0.6)
+            idx = equipment_nodes.index(node) % 4
+            pos[node] = (base_x + 0.35 * (idx - 1.5), base_y - 0.7)
 
-    # Пользователи — снизу от сегмента
-    for user_id, seg, _, _, _ in user_nodes:
+    # Пользователи снизу от сегмента
+    for user_id, seg, target, svc in user_nodes:
         if seg in pos:
             base_x, base_y = pos[seg]
-            idx = user_nodes.index((user_id, seg, _, _, _)) % 3
-            pos[user_id] = (base_x + 0.3 * (idx - 1), base_y - 1.0)
+            idx = user_nodes.index((user_id, seg, target, svc)) % 3
+            pos[user_id] = (base_x + 0.25 * (idx - 1), base_y - 1.2)
             G.add_edge(user_id, seg, style='dotted', color='orange')
 
     plt.figure(figsize=(14, 10))
 
-    # Рисуем
     segment_nodes = [n for n in G.nodes if G.nodes[n].get('type') == 'segment']
     equipment_nodes_list = [n for n in G.nodes if G.nodes[n].get('type') == 'equipment']
     user_nodes_list = [n for n in G.nodes if G.nodes[n].get('type') == 'user']
@@ -74,7 +73,7 @@ def draw_and_save_network(segments, global_rules, user_rules, segment_equipment,
     if equipment_nodes_list:
         nx.draw_networkx_nodes(G, pos, nodelist=equipment_nodes_list, node_color="lightgreen", node_size=1800)
     if user_nodes_list:
-        nx.draw_networkx_nodes(G, pos, nodelist=user_nodes_list, node_color="pink", node_size=1500)
+        nx.draw_networkx_nodes(G, pos, nodelist=user_nodes_list, node_color="pink", node_size=1600)
 
     nx.draw_networkx_labels(G, pos, font_size=9, font_weight="bold")
 

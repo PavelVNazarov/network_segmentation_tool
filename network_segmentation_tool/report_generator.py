@@ -25,8 +25,8 @@ def generate_report(segments, subnets, global_rules, user_rules, segment_equipme
 
     report += "\nПравила для пользователей:\n"
     if user_rules:
-        for seg, fio, pos, src, dst, svc in user_rules:
-            report += f" - {fio} ({pos}, сегмент {seg}): {src} → {dst} : {svc}\n"
+        for seg, fio, pos, target, svc in user_rules:
+            report += f" - {fio} ({pos}, сегмент {seg}) → {target} : {svc}\n"
     else:
         report += " - Не заданы.\n"
 

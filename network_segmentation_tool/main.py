@@ -5,6 +5,7 @@ from example_data import STANDARD_SEGMENTS, STANDARD_SERVICES, STANDARD_EQUIPMEN
 from validation import validate_subnets, validate_rules, validate_user_rules
 from report_generator import generate_report
 from visualizer import draw_and_save_network
+import ipaddress
 
 
 class NetworkSegmentationApp:
@@ -19,8 +20,13 @@ class NetworkSegmentationApp:
         frame = ttk.Frame(self.root, padding=30)
         frame.pack(expand=True)
 
-        ttk.Label(frame, text="Программа для автоматизации сегментации и межсетевого взаимодействия в локальных вычислительных сетях предприятий",
-                  font=("Arial", 14), wraplength=700, justify="center").pack(pady=20)
+        ttk.Label(
+            frame,
+            text="Программа для автоматизации сегментации и межсетевого взаимодействия в локальных вычислительных сетях предприятий",
+            font=("Arial", 14),
+            wraplength=700,
+            justify="center"
+        ).pack(pady=20)
 
         ttk.Button(frame, text="Начать", command=self.show_main_interface, width=20).pack(pady=30)
 
@@ -32,29 +38,20 @@ class NetworkSegmentationApp:
         self.clear_window()
         self.setup_data()
 
-        notebook = ttk.Notebook(self.root)
-        notebook.pack(fill='both', expand=True, padx=10, pady=10)
+        self.notebook = ttk.Notebook(self.root)
+        self.notebook.pack(fill='both', expand=True, padx=10, pady=10)
 
-        self.tab_segments = ttk.Frame(notebook)
-        self.tab_global_rules = ttk.Frame(notebook)
-        self.tab_user_rules = ttk.Frame(notebook)
-        self.tab_equipment = ttk.Frame(notebook)
+        self.tab_segments = ttk.Frame(self.notebook)
+        self.notebook.add(self.tab_segments, text="1. Сегменты и подсети")
 
-        notebook.add(self.tab_segments, text="Сегменты и подсети")
-        notebook.add(self.tab_global_rules, text="Глобальные правила")
-        notebook.add(self.tab_user_rules, text="Правила для пользователей")
-        notebook.add(self.tab_equipment, text="Оборудование")
+        self.tabs_created = False
 
         self.build_segments_tab()
-        self.build_global_rules_tab()
-        self.build_user_rules_tab()
-        self.build_equipment_tab()
 
-        btn_frame = ttk.Frame(self.root)
-        btn_frame.pack(pady=10)
-        ttk.Button(btn_frame, text="Анализ и отчёт", command=self.analyze).pack(side='left', padx=5)
-        ttk.Button(btn_frame, text="Сохранить отчёт", command=self.save_report).pack(side='left', padx=5)
-        ttk.Button(btn_frame, text="Назад", command=self.show_welcome_screen).pack(side='left', padx=5)
+        self.bottom_button_frame = ttk.Frame(self.root)
+        self.bottom_button_frame.pack(pady=10)
+        ttk.Button(self.bottom_button_frame, text="Сохранить отчёт", command=self.save_report).pack(side='left', padx=5)
+        ttk.Button(self.bottom_button_frame, text="Назад", command=self.show_welcome_screen).pack(side='left', padx=5)
 
         self.output_text = tk.Text(self.root, height=10, wrap='word')
         self.output_text.pack(fill='both', padx=10, pady=5, expand=True)
@@ -64,16 +61,14 @@ class NetworkSegmentationApp:
         self.subnets = {}
         self.global_rules = []
         self.user_rules = []
-        self.segment_equipment = {}  # seg -> {eq: count}
+        self.segment_equipment = {}
 
-    # === СЕГМЕНТЫ ===
     def build_segments_tab(self):
         control_frame = ttk.Frame(self.tab_segments)
         control_frame.pack(fill='x', pady=5)
         ttk.Button(control_frame, text="+ Добавить сегмент", command=self.add_segment_row).pack(side='left')
         ttk.Button(control_frame, text="Стандартные", command=self.load_standard_segments).pack(side='left', padx=5)
 
-        # Заголовки
         header = ttk.Frame(self.tab_segments)
         header.pack(fill='x', pady=(0, 5))
         ttk.Label(header, text="Имя сегмента", width=20, anchor='w').pack(side='left', padx=2)
@@ -85,6 +80,13 @@ class NetworkSegmentationApp:
 
         for _ in range(2):
             self.add_segment_row()
+
+        continue_btn = ttk.Button(
+            self.tab_segments,
+            text="Продолжить (требуется минимум 2 сегмента)",
+            command=self.try_continue
+        )
+        continue_btn.pack(pady=15)
 
     def add_segment_row(self):
         row_frame = ttk.Frame(self.segment_container)
@@ -114,18 +116,89 @@ class NetworkSegmentationApp:
             self.segment_rows[-1][1].insert(0, seg)
             self.segment_rows[-1][2].insert(0, f"192.168.{i+1}.0/24")
 
-    # === ГЛОБАЛЬНЫЕ ПРАВИЛА ===
+    def validate_segment_names_and_subnets(self):
+        segments = []
+        subnets = {}
+        errors = []
+
+        for _, name_ent, cidr_ent in self.segment_rows:
+            name = name_ent.get().strip()
+            cidr = cidr_ent.get().strip()
+            if not name:
+                continue
+            if not name.replace('_', '').replace('-', '').isalnum():
+                errors.append(f"Недопустимое имя сегмента: '{name}'")
+            elif name in segments:
+                errors.append(f"Дублирование сегмента: '{name}'")
+            else:
+                segments.append(name)
+                subnets[name] = cidr
+
+        if len(segments) < 2:
+            errors.append("Требуется минимум 2 сегмента")
+
+        for name, cidr in subnets.items():
+            if cidr:
+                try:
+                    ipaddress.ip_network(cidr, strict=False)
+                except ValueError:
+                    errors.append(f"Некорректный CIDR для '{name}': {cidr}")
+
+        return segments, subnets, errors
+
+    def try_continue(self):
+        segments, subnets, errors = self.validate_segment_names_and_subnets()
+        if errors:
+            msg = "Исправьте ошибки:\n" + "\n".join(f" - {e}" for e in errors)
+            messagebox.showerror("Ошибка в сегментах", msg)
+            return
+
+        self.segments = segments
+        self.subnets = subnets
+
+        if not self.tabs_created:
+            self.create_remaining_tabs()
+            self.tabs_created = True
+
+        self.notebook.select(self.tab_global_rules)
+
+    def create_remaining_tabs(self):
+        self.tab_global_rules = ttk.Frame(self.notebook)
+        self.notebook.add(self.tab_global_rules, text="2. Глобальные правила")
+        self.build_global_rules_tab()
+
+        self.tab_user_rules = ttk.Frame(self.notebook)
+        self.notebook.add(self.tab_user_rules, text="3. Правила для пользователей")
+        self.build_user_rules_tab()
+
+        self.tab_equipment = ttk.Frame(self.notebook)
+        self.notebook.add(self.tab_equipment, text="4. Оборудование")
+        self.build_equipment_tab()
+
+        self.tab_instructions = ttk.Frame(self.notebook)
+        self.notebook.add(self.tab_instructions, text="5. Инструкция")
+        self.build_instructions_tab()
+
+        self.update_all_comboboxes()
+
+        self.bottom_button_frame.destroy()
+        new_btn_frame = ttk.Frame(self.root)
+        new_btn_frame.pack(pady=10)
+        ttk.Button(new_btn_frame, text="Анализ и отчёт", command=self.analyze).pack(side='left', padx=5)
+        ttk.Button(new_btn_frame, text="Сохранить рисунок сети", command=self.save_diagram).pack(side='left', padx=5)
+        ttk.Button(new_btn_frame, text="Сохранить отчёт", command=self.save_report).pack(side='left', padx=5)
+        ttk.Button(new_btn_frame, text="Назад", command=self.show_welcome_screen).pack(side='left', padx=5)
+
     def build_global_rules_tab(self):
         control_frame = ttk.Frame(self.tab_global_rules)
         control_frame.pack(fill='x', pady=5)
         ttk.Button(control_frame, text="+ Добавить правило", command=self.add_global_rule_row).pack(side='left')
 
-        # Заголовки
         header = ttk.Frame(self.tab_global_rules)
         header.pack(fill='x', pady=(0, 5))
         ttk.Label(header, text="Имя правила", width=15, anchor='w').pack(side='left', padx=2)
-        ttk.Label(header, text="Сегмент 1", width=15, anchor='w').pack(side='left', padx=2)
-        ttk.Label(header, text="Сегмент 2", width=15, anchor='w').pack(side='left', padx=2)
+        ttk.Label(header, text="SRC Сегмент", width=15, anchor='w').pack(side='left', padx=2)
+        ttk.Label(header, text="DST Сегмент", width=15, anchor='w').pack(side='left', padx=2)
         ttk.Label(header, text="Сетевой протокол", width=18, anchor='w').pack(side='left', padx=2)
 
         self.global_rule_container = ttk.Frame(self.tab_global_rules)
@@ -159,20 +232,17 @@ class NetworkSegmentationApp:
         frame.destroy()
         self.global_rule_rows = [(f, n, s, d, v) for f, n, s, d, v in self.global_rule_rows if f != frame]
 
-    # === ПРАВИЛА ДЛЯ ПОЛЬЗОВАТЕЛЕЙ ===
     def build_user_rules_tab(self):
         control_frame = ttk.Frame(self.tab_user_rules)
         control_frame.pack(fill='x', pady=5)
         ttk.Button(control_frame, text="+ Добавить правило", command=self.add_user_rule_row).pack(side='left')
 
-        # Заголовки
         header = ttk.Frame(self.tab_user_rules)
         header.pack(fill='x', pady=(0, 5))
         ttk.Label(header, text="Сегмент", width=12).pack(side='left', padx=2)
         ttk.Label(header, text="ФИО", width=18).pack(side='left', padx=2)
         ttk.Label(header, text="Должность", width=15).pack(side='left', padx=2)
-        ttk.Label(header, text="Сегмент 1", width=12).pack(side='left', padx=2)
-        ttk.Label(header, text="Сегмент 2", width=12).pack(side='left', padx=2)
+        ttk.Label(header, text="Доступ к сегменту", width=18).pack(side='left', padx=2)
         ttk.Label(header, text="Протокол", width=15).pack(side='left', padx=2)
 
         self.user_rule_container = ttk.Frame(self.tab_user_rules)
@@ -192,23 +262,20 @@ class NetworkSegmentationApp:
         fio_entry.pack(side='left', padx=2)
         pos_entry = ttk.Entry(row_frame, width=13)
         pos_entry.pack(side='left', padx=2)
-        src_cb = ttk.Combobox(row_frame, values=self.segments, width=10)
-        src_cb.pack(side='left', padx=2)
-        dst_cb = ttk.Combobox(row_frame, values=self.segments, width=10)
-        dst_cb.pack(side='left', padx=2)
+        target_cb = ttk.Combobox(row_frame, values=self.segments, width=15)
+        target_cb.pack(side='left', padx=2)
         svc_cb = ttk.Combobox(row_frame, values=list(STANDARD_SERVICES.keys()), width=13)
         svc_cb.pack(side='left', padx=2)
 
         btn = ttk.Button(row_frame, text="×", width=3, command=lambda f=row_frame: self.remove_user_rule_row(f))
         btn.pack(side='left', padx=2)
 
-        self.user_rule_rows.append((row_frame, seg_cb, fio_entry, pos_entry, src_cb, dst_cb, svc_cb))
+        self.user_rule_rows.append((row_frame, seg_cb, fio_entry, pos_entry, target_cb, svc_cb))
 
     def remove_user_rule_row(self, frame):
         frame.destroy()
-        self.user_rule_rows = [(f, s, fio, pos, src, dst, svc) for f, s, fio, pos, src, dst, svc in self.user_rule_rows if f != frame]
+        self.user_rule_rows = [(f, s, fio, pos, target, svc) for f, s, fio, pos, target, svc in self.user_rule_rows if f != frame]
 
-    # === ОБОРУДОВАНИЕ ===
     def build_equipment_tab(self):
         canvas = tk.Canvas(self.tab_equipment)
         scrollbar = ttk.Scrollbar(self.tab_equipment, orient="vertical", command=canvas.yview)
@@ -222,17 +289,15 @@ class NetworkSegmentationApp:
         canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
         canvas.configure(yscrollcommand=scrollbar.set)
 
-        # Заголовки
         header = ttk.Frame(scrollable_frame)
         header.grid(row=0, column=0, columnspan=3, sticky='w', pady=5)
-        ttk.Label(header, text="Сегмент").pack(side='left', padx=(10, 20))
-        ttk.Label(header, text="Тип оборудования").pack(side='left', padx=(0, 20))
-        ttk.Label(header, text="Количество").pack(side='left')
+        ttk.Label(header, text="Сегмент", width=15).pack(side='left', padx=(10, 15))
+        ttk.Label(header, text="Оборудование", width=20).pack(side='left', padx=(0, 15))
+        ttk.Label(header, text="Количество", width=12).pack(side='left')
 
         self.equipment_rows = []
         row_index = 1
 
-        # Добавление оборудования
         def add_equipment_row():
             nonlocal row_index
             seg_cb = ttk.Combobox(scrollable_frame, values=self.segments, width=15)
@@ -252,7 +317,6 @@ class NetworkSegmentationApp:
         add_btn.grid(row=row_index, column=0, columnspan=2, sticky='w', pady=10)
         row_index += 1
 
-        # Добавим 3 строки по умолчанию
         for _ in range(3):
             add_equipment_row()
 
@@ -262,28 +326,48 @@ class NetworkSegmentationApp:
     def remove_equipment_row(self, row_id):
         self.equipment_rows = [r for r in self.equipment_rows if r[0] != row_id]
 
-    # === СБОР ДАННЫХ ===
-    def collect_data(self):
-        # Сегменты
-        self.segments = []
-        self.subnets = {}
-        for _, name_ent, cidr_ent in self.segment_rows:
-            name = name_ent.get().strip()
-            if name:
-                if name in self.segments:
-                    messagebox.showerror("Ошибка", f"Дублирование сегмента: {name}")
-                    return False
-                self.segments.append(name)
-                self.subnets[name] = cidr_ent.get().strip()
+    def build_instructions_tab(self):
+        text = """ИНСТРУКЦИЯ ПО ИСПОЛЬЗОВАНИЮ
 
-        if not self.segments:
-            messagebox.showwarning("Ошибка", "Добавьте хотя бы один сегмент!")
-            return False
+1. Вкладка "1. Сегменты и подсети":
+   - Добавьте минимум 2 сегмента.
+   - Укажите подсеть в формате CIDR (например, 192.168.1.0/24).
+   - Нажмите "Продолжить".
 
-        # Обновим выпадающие списки во всех вкладках
-        self.update_comboboxes()
+2. Вкладка "2. Глобальные правила":
+   - Задайте правила взаимодействия между сегментами.
+   - Укажите имя правила, SRC и DST сегменты, протокол.
 
-        # Глобальные правила
+3. Вкладка "3. Правила для пользователей":
+   - Укажите сегмент пользователя, ФИО, должность.
+   - Разрешите доступ к другому сегменту по выбранному протоколу.
+
+4. Вкладка "4. Оборудование":
+   - Привяжите оборудование к конкретному сегменту.
+   - Укажите количество устройств.
+
+5. Кнопки внизу окна:
+   - "Анализ и отчёт" — проверка модели и генерация текстового отчёта.
+   - "Сохранить рисунок сети" — экспорт схемы в PNG или PDF.
+   - "Сохранить отчёт" — сохранение текстового отчёта в файл.
+
+Примечание: схема отображает сегменты (голубые узлы), оборудование (зелёные), пользователей (розовые) и правила взаимодействия."""
+        text_widget = tk.Text(self.tab_instructions, wrap='word', padx=10, pady=10)
+        text_widget.insert('1.0', text)
+        text_widget.config(state='disabled')
+        text_widget.pack(fill='both', expand=True)
+
+    def update_all_comboboxes(self):
+        for _, name_ent, src_cb, dst_cb, svc_cb in self.global_rule_rows:
+            src_cb['values'] = self.segments
+            dst_cb['values'] = self.segments
+        for _, seg_cb, fio_ent, pos_ent, target_cb, svc_cb in self.user_rule_rows:
+            seg_cb['values'] = self.segments
+            target_cb['values'] = self.segments
+        for _, seg_cb, eq_cb, count_var in self.equipment_rows:
+            seg_cb['values'] = self.segments
+
+    def collect_data_for_analysis(self):
         self.global_rules = []
         for _, name_ent, src_cb, dst_cb, svc_cb in self.global_rule_rows:
             name = name_ent.get().strip()
@@ -295,21 +379,18 @@ class NetworkSegmentationApp:
                     svc = "Custom"
                 self.global_rules.append((name, src, dst, svc))
 
-        # Правила пользователей
         self.user_rules = []
-        for _, seg_cb, fio_ent, pos_ent, src_cb, dst_cb, svc_cb in self.user_rule_rows:
+        for _, seg_cb, fio_ent, pos_ent, target_cb, svc_cb in self.user_rule_rows:
             seg = seg_cb.get().strip()
             fio = fio_ent.get().strip()
             pos = pos_ent.get().strip()
-            src = src_cb.get().strip()
-            dst = dst_cb.get().strip()
+            target = target_cb.get().strip()
             svc = svc_cb.get().strip()
-            if seg and fio and src and dst and svc:
+            if seg and fio and target and svc:
                 if svc == "Custom":
                     svc = "Custom"
-                self.user_rules.append((seg, fio, pos, src, dst, svc))
+                self.user_rules.append((seg, fio, pos, target, svc))
 
-        # Оборудование по сегментам
         self.segment_equipment = {seg: {} for seg in self.segments}
         for _, seg_cb, eq_cb, count_var in self.equipment_rows:
             seg = seg_cb.get().strip()
@@ -320,28 +401,12 @@ class NetworkSegmentationApp:
                     self.segment_equipment[seg][eq] = 0
                 self.segment_equipment[seg][eq] += cnt
 
-        return True
-
-    def update_comboboxes(self):
-        # Обновить все Combobox'ы с сегментами
-        for _, name_ent, src_cb, dst_cb, svc_cb in self.global_rule_rows:
-            src_cb['values'] = self.segments
-            dst_cb['values'] = self.segments
-        for _, seg_cb, fio_ent, pos_ent, src_cb, dst_cb, svc_cb in self.user_rule_rows:
-            seg_cb['values'] = self.segments
-            src_cb['values'] = self.segments
-            dst_cb['values'] = self.segments
-        for _, seg_cb, eq_cb, count_var in self.equipment_rows:
-            seg_cb['values'] = self.segments
-
-    # === АНАЛИЗ ===
     def analyze(self):
-        if not self.collect_data():
-            return
+        self.collect_data_for_analysis()
 
         all_rules = [(name, src, dst, svc) for name, src, dst, svc in self.global_rules]
-        for seg, fio, pos, src, dst, svc in self.user_rules:
-            all_rules.append((f"User:{fio}", src, dst, svc))
+        for seg, fio, pos, target, svc in self.user_rules:
+            all_rules.append((f"User:{fio}", seg, target, svc))
 
         subnet_errors = validate_subnets(self.subnets)
         rule_errors = validate_rules(all_rules, self.segments)
@@ -361,14 +426,22 @@ class NetworkSegmentationApp:
         self.output_text.delete(1.0, tk.END)
         self.output_text.insert(tk.END, report)
 
-        if not errors:
+        if errors:
+            messagebox.showwarning("Внимание", f"Обнаружено ошибок: {len(errors)}. Отчёт содержит предупреждения.")
+
+    def save_diagram(self):
+        self.collect_data_for_analysis()
+        try:
+            if not self.segments:
+                messagebox.showerror("Ошибка", "Нет сегментов для визуализации")
+                return
             img_path = draw_and_save_network(
                 self.segments, self.global_rules, self.user_rules, self.segment_equipment, self.root
             )
             if img_path:
                 messagebox.showinfo("Успех", f"Схема сохранена:\n{img_path}")
-        else:
-            messagebox.showwarning("Внимание", f"Обнаружено ошибок: {len(errors)}. Схема не создана.")
+        except Exception as e:
+            messagebox.showerror("Ошибка", f"Не удалось создать схему:\n{str(e)}")
 
     def save_report(self):
         content = self.output_text.get(1.0, tk.END).strip()
