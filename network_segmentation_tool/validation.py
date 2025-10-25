@@ -1,6 +1,7 @@
 # validation.py
 import ipaddress
 
+
 def validate_subnets(subnets):
     errors = []
     net_objects = []
@@ -18,7 +19,8 @@ def validate_subnets(subnets):
             if net_objects[i][1].overlaps(net_objects[j][1]):
                 errors.append(f"Пересечение подсетей: '{net_objects[i][0]}' и '{net_objects[j][0]}'")
 
-    return errors if errors else None
+    return errors
+
 
 def validate_rules(rules, all_segments):
     errors = []
@@ -29,16 +31,27 @@ def validate_rules(rules, all_segments):
             continue
         key = (src, dst, svc)
         if key in seen:
-            errors.append(f"Дублирующее правило в '{rule_name}': {src} → {dst} по {svc}")
-        seen.add(key)
-    return errors if errors else None
+            errors.append(f"Дублирующее правило: {src} → {dst} по {svc} (уже задано ранее)")
+        else:
+            seen.add(key)
+    return errors
+
 
 def validate_user_rules(user_rules, all_segments):
     errors = []
+    seen = set()  # Теперь ключ включает сегмент источника
     for seg, fio, pos, target_seg, svc in user_rules:
         if seg not in all_segments:
-            errors.append(f"Пользователь '{fio}': сегмент '{seg}' не объявлен")
+            errors.append(f"Пользователь '{fio}': сегмент источника '{seg}' не объявлен")
         if target_seg not in all_segments:
             errors.append(f"Пользователь '{fio}': недопустимый целевой сегмент '{target_seg}'")
-    return errors if errors else None
+
+        # Ключ для дубликата: (сегмент_источника, ФИО, целевой_сегмент, сервис)
+        user_key = (seg, fio, target_seg, svc)
+        if user_key in seen:
+            errors.append(
+                f"Дублирующее правило для пользователя '{fio}' в сегменте {seg}: доступ к {target_seg} по {svc}")
+        else:
+            seen.add(user_key)
+    return errors
 

@@ -1,5 +1,14 @@
 # report_generator.py
 
+from risk_analyzer import analyze_risks
+
+def generate_risk_report(segments, global_rules, user_rules, segment_equipment):
+    report = "=== Отчёт о потенциальных рисках и сложностях ===\n\n"
+    risks = analyze_risks(segments, global_rules, user_rules, segment_equipment)
+    for r in risks:
+        report += f"{r}\n"
+    return report
+
 def generate_report(segments, subnets, global_rules, user_rules, segment_equipment, validation_errors=None):
     report = "=== Отчёт по сегментации локальной сети ===\n\n"
 
@@ -13,7 +22,9 @@ def generate_report(segments, subnets, global_rules, user_rules, segment_equipme
 
     report += "Сегменты и подсети:\n"
     for seg in segments:
-        cidr = subnets.get(seg, "не задано")
+        cidr = subnets.get(seg, "").strip()
+        if not cidr:
+            cidr = "не задано"
         report += f" - {seg}: {cidr}\n"
 
     report += "\nГлобальные правила взаимодействия:\n"
