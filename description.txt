@@ -38,4 +38,10 @@ pip install matplotlib networkx
 pip install pyinstaller
 pyinstaller --onefile --windowed --noconfirm main.py
 
-pyinstaller --onefile --windowed --noconfirm invest_calculator.py
+без тестов:
+pyinstaller --onefile --windowed ^
+  --exclude-module unittest ^
+  --exclude-module tests ^
+  --exclude-module pytest ^
+  --hidden-import=tkinter ^
+  --name "NetworkSegmentationTool" main.py
