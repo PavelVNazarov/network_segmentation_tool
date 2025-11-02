@@ -15,6 +15,6 @@ STANDARD_SERVICES = {
 
 STANDARD_EQUIPMENT = [
     "Firewall", "Router", "Switch", "Server", "Workstation",
-    "Printer", "NAS", "IoT Device", "Load Balancer"
+    "Printer", "NAS", "Storage", "Load Balancer"
 ]
 

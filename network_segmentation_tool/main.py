@@ -3,17 +3,55 @@ import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
 from example_data import STANDARD_SEGMENTS, STANDARD_SERVICES, STANDARD_EQUIPMENT
 from validation import validate_subnets, validate_rules, validate_user_rules
-from report_generator import generate_report
+from report_generator import generate_report, generate_risk_report
 from visualizer import draw_and_save_network
 import ipaddress
-from report_generator import generate_report, generate_risk_report
+import platform
+import subprocess
+import tempfile
+import os
+
+def open_image_file(filepath):
+    try:
+        if platform.system() == "Windows":
+            os.startfile(filepath)
+        elif platform.system() == "Darwin":
+            subprocess.run(["open", filepath])
+        else:
+            subprocess.run(["xdg-open", filepath])
+    except Exception as e:
+        messagebox.showerror("Ошибка", f"Не удалось открыть изображение:\n{str(e)}")
 
 class NetworkSegmentationApp:
     def __init__(self, root):
         self.root = root
         self.root.title("Автоматизация сегментации ЛВС")
-        self.root.geometry("1050x800")
+        self.root.geometry("1050x700")
         self.show_welcome_screen()
+
+    def create_scrollable_frame(self, parent):
+        canvas = tk.Canvas(parent)
+        scrollbar = ttk.Scrollbar(parent, orient="vertical", command=canvas.yview)
+        scrollable_frame = ttk.Frame(canvas)
+
+        scrollable_frame.bind(
+            "<Configure>",
+            lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
+        )
+
+        canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
+        canvas.configure(yscrollcommand=scrollbar.set)
+
+        canvas.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
+
+        def _on_mousewheel(event):
+            canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+
+        canvas.bind("<MouseWheel>", _on_mousewheel)
+        scrollable_frame.bind("<MouseWheel>", _on_mousewheel)
+
+        return scrollable_frame
 
     def show_welcome_screen(self):
         self.clear_window()
@@ -62,19 +100,22 @@ class NetworkSegmentationApp:
         self.global_rules = []
         self.user_rules = []
         self.segment_equipment = {}
+        self.equipment_rows = []  # ← КРИТИЧЕСКИ ВАЖНАЯ СТРОКА
 
     def build_segments_tab(self):
-        control_frame = ttk.Frame(self.tab_segments)
+        scrollable = self.create_scrollable_frame(self.tab_segments)
+
+        control_frame = ttk.Frame(scrollable)
         control_frame.pack(fill='x', pady=5)
         ttk.Button(control_frame, text="+ Добавить сегмент", command=self.add_segment_row).pack(side='left')
         ttk.Button(control_frame, text="Стандартные", command=self.load_standard_segments).pack(side='left', padx=5)
 
-        header = ttk.Frame(self.tab_segments)
+        header = ttk.Frame(scrollable)
         header.pack(fill='x', pady=(0, 5))
         ttk.Label(header, text="Имя сегмента", width=20, anchor='w').pack(side='left', padx=2)
         ttk.Label(header, text="Подсеть", width=20, anchor='w').pack(side='left', padx=2)
 
-        self.segment_container = ttk.Frame(self.tab_segments)
+        self.segment_container = ttk.Frame(scrollable)
         self.segment_container.pack(fill='both', expand=True)
         self.segment_rows = []
 
@@ -82,11 +123,12 @@ class NetworkSegmentationApp:
             self.add_segment_row()
 
         continue_btn = ttk.Button(
-            self.tab_segments,
+            scrollable,
             text="Продолжить (требуется минимум 2 сегмента)",
             command=self.try_continue
         )
         continue_btn.pack(pady=15)
+        self.continue_button = continue_btn  # для блокировки
 
     def add_segment_row(self):
         row_frame = ttk.Frame(self.segment_container)
@@ -147,20 +189,32 @@ class NetworkSegmentationApp:
         return segments, subnets, errors
 
     def try_continue(self):
-        segments, subnets, errors = self.validate_segment_names_and_subnets()
-        if errors:
-            msg = "Исправьте ошибки:\n" + "\n".join(f" - {e}" for e in errors)
-            messagebox.showerror("Ошибка в сегментах", msg)
-            return
+        # Блокируем кнопку, чтобы избежать двойного нажатия
+        self.continue_button.config(state='disabled')
+        self.root.update_idletasks()
 
-        self.segments = segments
-        self.subnets = subnets
+        try:
+            segments, subnets, errors = self.validate_segment_names_and_subnets()
+            if errors:
+                msg = "Исправьте ошибки:\n" + "\n".join(f" - {e}" for e in errors)
+                messagebox.showerror("Ошибка в сегментах", msg)
+                return
 
-        if not self.tabs_created:
-            self.create_remaining_tabs()
-            self.tabs_created = True
+            self.segments = segments
+            self.subnets = subnets
 
-        self.notebook.select(self.tab_global_rules)
+            if not self.tabs_created:
+                self.create_remaining_tabs()
+                self.tabs_created = True
+            else:
+                # Обновляем данные в уже созданных вкладках
+                self.update_all_comboboxes()
+
+            self.notebook.select(self.tab_global_rules)
+
+        finally:
+            # Всегда разблокируем кнопку
+            self.continue_button.config(state='normal')
 
     def create_remaining_tabs(self):
         self.tab_global_rules = ttk.Frame(self.notebook)
@@ -186,22 +240,25 @@ class NetworkSegmentationApp:
         new_btn_frame.pack(pady=10)
         ttk.Button(new_btn_frame, text="Анализ и отчёт", command=self.analyze).pack(side='left', padx=5)
         ttk.Button(new_btn_frame, text="Сохранить рисунок сети", command=self.save_diagram).pack(side='left', padx=5)
+        ttk.Button(new_btn_frame, text="Просмотреть схему", command=self.view_diagram).pack(side='left', padx=5)
         ttk.Button(new_btn_frame, text="Сохранить отчёт", command=self.save_report).pack(side='left', padx=5)
         ttk.Button(new_btn_frame, text="Назад", command=self.show_welcome_screen).pack(side='left', padx=5)
 
     def build_global_rules_tab(self):
-        control_frame = ttk.Frame(self.tab_global_rules)
+        scrollable = self.create_scrollable_frame(self.tab_global_rules)
+
+        control_frame = ttk.Frame(scrollable)
         control_frame.pack(fill='x', pady=5)
         ttk.Button(control_frame, text="+ Добавить правило", command=self.add_global_rule_row).pack(side='left')
 
-        header = ttk.Frame(self.tab_global_rules)
+        header = ttk.Frame(scrollable)
         header.pack(fill='x', pady=(0, 5))
         ttk.Label(header, text="Имя правила", width=15, anchor='w').pack(side='left', padx=2)
         ttk.Label(header, text="SRC Сегмент", width=15, anchor='w').pack(side='left', padx=2)
         ttk.Label(header, text="DST Сегмент", width=15, anchor='w').pack(side='left', padx=2)
-        ttk.Label(header, text="Сетевой протокол", width=18, anchor='w').pack(side='left', padx=2)
+        ttk.Label(header, text="Протокол", width=18, anchor='w').pack(side='left', padx=2)
 
-        self.global_rule_container = ttk.Frame(self.tab_global_rules)
+        self.global_rule_container = ttk.Frame(scrollable)
         self.global_rule_container.pack(fill='both', expand=True)
         self.global_rule_rows = []
 
@@ -233,11 +290,13 @@ class NetworkSegmentationApp:
         self.global_rule_rows = [(f, n, s, d, v) for f, n, s, d, v in self.global_rule_rows if f != frame]
 
     def build_user_rules_tab(self):
-        control_frame = ttk.Frame(self.tab_user_rules)
+        scrollable = self.create_scrollable_frame(self.tab_user_rules)
+
+        control_frame = ttk.Frame(scrollable)
         control_frame.pack(fill='x', pady=5)
         ttk.Button(control_frame, text="+ Добавить правило", command=self.add_user_rule_row).pack(side='left')
 
-        header = ttk.Frame(self.tab_user_rules)
+        header = ttk.Frame(scrollable)
         header.pack(fill='x', pady=(0, 5))
         ttk.Label(header, text="Сегмент", width=12).pack(side='left', padx=2)
         ttk.Label(header, text="ФИО", width=18).pack(side='left', padx=2)
@@ -245,7 +304,7 @@ class NetworkSegmentationApp:
         ttk.Label(header, text="Доступ к сегменту", width=18).pack(side='left', padx=2)
         ttk.Label(header, text="Протокол", width=15).pack(side='left', padx=2)
 
-        self.user_rule_container = ttk.Frame(self.tab_user_rules)
+        self.user_rule_container = ttk.Frame(scrollable)
         self.user_rule_container.pack(fill='both', expand=True)
         self.user_rule_rows = []
 
@@ -277,54 +336,43 @@ class NetworkSegmentationApp:
         self.user_rule_rows = [(f, s, fio, pos, target, svc) for f, s, fio, pos, target, svc in self.user_rule_rows if f != frame]
 
     def build_equipment_tab(self):
-        canvas = tk.Canvas(self.tab_equipment)
-        scrollbar = ttk.Scrollbar(self.tab_equipment, orient="vertical", command=canvas.yview)
-        scrollable_frame = ttk.Frame(canvas)
+        scrollable = self.create_scrollable_frame(self.tab_equipment)
 
-        scrollable_frame.bind(
-            "<Configure>",
-            lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
-        )
+        header = ttk.Frame(scrollable)
+        header.pack(fill='x', pady=5)
+        ttk.Label(header, text="Сегмент", width=15, anchor='w').pack(side='left', padx=(10, 5))
+        ttk.Label(header, text="Оборудование", width=20, anchor='w').pack(side='left', padx=(0, 5))
+        ttk.Label(header, text="Количество", width=12, anchor='w').pack(side='left')
 
-        canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
-        canvas.configure(yscrollcommand=scrollbar.set)
+        add_btn = ttk.Button(scrollable, text="+ Добавить оборудование", command=self.add_equipment_row)
+        add_btn.pack(pady=5)
 
-        header = ttk.Frame(scrollable_frame)
-        header.grid(row=0, column=0, columnspan=3, sticky='w', pady=5)
-        ttk.Label(header, text="Сегмент", width=15).pack(side='left', padx=(10, 15))
-        ttk.Label(header, text="Оборудование", width=20).pack(side='left', padx=(0, 15))
-        ttk.Label(header, text="Количество", width=12).pack(side='left')
-
-        self.equipment_rows = []
-        row_index = 1
-
-        def add_equipment_row():
-            nonlocal row_index
-            seg_cb = ttk.Combobox(scrollable_frame, values=self.segments, width=15)
-            seg_cb.grid(row=row_index, column=0, padx=10, pady=2, sticky='w')
-            eq_cb = ttk.Combobox(scrollable_frame, values=STANDARD_EQUIPMENT, width=20)
-            eq_cb.grid(row=row_index, column=1, padx=10, pady=2, sticky='w')
-            count_var = tk.IntVar(value=0)
-            spin = ttk.Spinbox(scrollable_frame, from_=0, to=1000, width=8, textvariable=count_var)
-            spin.grid(row=row_index, column=2, padx=10, pady=2, sticky='w')
-            btn = ttk.Button(scrollable_frame, text="×", width=3,
-                             command=lambda r=row_index: self.remove_equipment_row(r))
-            btn.grid(row=row_index, column=3, padx=5, pady=2)
-            self.equipment_rows.append((row_index, seg_cb, eq_cb, count_var))
-            row_index += 1
-
-        add_btn = ttk.Button(scrollable_frame, text="+ Добавить оборудование", command=add_equipment_row)
-        add_btn.grid(row=row_index, column=0, columnspan=2, sticky='w', pady=10)
-        row_index += 1
+        self.equipment_container = ttk.Frame(scrollable)
+        self.equipment_container.pack(fill='both', expand=True, pady=5)
 
         for _ in range(3):
-            add_equipment_row()
+            self.add_equipment_row()
 
-        canvas.pack(side="left", fill="both", expand=True)
-        scrollbar.pack(side="right", fill="y")
+    def add_equipment_row(self):
+        row_frame = ttk.Frame(self.equipment_container)
+        row_frame.pack(fill='x', pady=2)
 
-    def remove_equipment_row(self, row_id):
-        self.equipment_rows = [r for r in self.equipment_rows if r[0] != row_id]
+        seg_cb = ttk.Combobox(row_frame, values=self.segments, width=15)
+        seg_cb.pack(side='left', padx=5)
+        eq_cb = ttk.Combobox(row_frame, values=STANDARD_EQUIPMENT, width=20)
+        eq_cb.pack(side='left', padx=5)
+        count_var = tk.IntVar(value=0)
+        spin = ttk.Spinbox(row_frame, from_=0, to=1000, width=8, textvariable=count_var)
+        spin.pack(side='left', padx=5)
+        btn = ttk.Button(row_frame, text="×", width=3,
+                         command=lambda f=row_frame: self.remove_equipment_row(f))
+        btn.pack(side='left', padx=5)
+
+        self.equipment_rows.append((row_frame, seg_cb, eq_cb, count_var))
+
+    def remove_equipment_row(self, frame):
+        frame.destroy()
+        self.equipment_rows = [(f, s, e, c) for f, s, e, c in self.equipment_rows if f != frame]
 
     def build_instructions_tab(self):
         text = """ИНСТРУКЦИЯ ПО ИСПОЛЬЗОВАНИЮ
@@ -375,8 +423,6 @@ class NetworkSegmentationApp:
             dst = dst_cb.get().strip()
             svc = svc_cb.get().strip()
             if name and src and dst and svc:
-                if svc == "Custom":
-                    svc = "Custom"
                 self.global_rules.append((name, src, dst, svc))
 
         self.user_rules = []
@@ -387,8 +433,6 @@ class NetworkSegmentationApp:
             target = target_cb.get().strip()
             svc = svc_cb.get().strip()
             if seg and fio and target and svc:
-                if svc == "Custom":
-                    svc = "Custom"
                 self.user_rules.append((seg, fio, pos, target, svc))
 
         self.segment_equipment = {seg: {} for seg in self.segments}
@@ -420,12 +464,9 @@ class NetworkSegmentationApp:
         if user_errors:
             errors.extend(user_errors)
 
-        # Генерация основного отчёта
         main_report = generate_report(
             self.segments, self.subnets, self.global_rules, self.user_rules, self.segment_equipment, errors
         )
-
-        # Генерация отчёта о рисках
         risk_report = generate_risk_report(
             self.segments, self.global_rules, self.user_rules, self.segment_equipment
         )
@@ -451,6 +492,39 @@ class NetworkSegmentationApp:
         except Exception as e:
             messagebox.showerror("Ошибка", f"Не удалось создать схему:\n{str(e)}")
 
+    def view_diagram(self):
+        self.collect_data_for_analysis()
+        if not self.segments:
+            messagebox.showerror("Ошибка", "Нет сегментов для визуализации")
+            return
+
+        try:
+            with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
+                temp_path = tmp.name
+
+            import tkinter.filedialog
+            original_asksave = tkinter.filedialog.asksaveasfilename
+            tkinter.filedialog.asksaveasfilename = lambda **kw: temp_path
+
+            try:
+                img_path = draw_and_save_network(
+                    self.segments,
+                    self.global_rules,
+                    self.user_rules,
+                    self.segment_equipment,
+                    self.root,
+                    show_legend=True
+                )
+                if img_path and os.path.exists(img_path):
+                    open_image_file(img_path)
+                else:
+                    messagebox.showwarning("Ошибка", "Не удалось создать схему")
+            finally:
+                tkinter.filedialog.asksaveasfilename = original_asksave
+
+        except Exception as e:
+            messagebox.showerror("Ошибка", f"Не удалось отобразить схему:\n{str(e)}")
+
     def save_report(self):
         content = self.output_text.get(1.0, tk.END).strip()
         if not content:
@@ -471,4 +545,5 @@ if __name__ == "__main__":
     root = tk.Tk()
     app = NetworkSegmentationApp(root)
     root.mainloop()
+
 

@@ -12,11 +12,11 @@ def analyze_risks(segments, global_rules, user_rules, segment_equipment):
     for name, src, dst, svc in global_rules:
         if svc in dangerous_ports:
             warnings.append(
-                f" Глобальное правило '{name}': открыт опасный сервис {svc} ({dangerous_ports[svc]}) между {src} и {dst}")
+                f"Глобальное правило '{name}': открыт опасный сервис {svc} ({dangerous_ports[svc]}) между {src} и {dst}")
 
     for seg, fio, pos, target, svc in user_rules:
         if svc in dangerous_ports:
-            warnings.append(f" Пользователь '{fio}' имеет доступ к опасному сервису {svc} в сегменте {target}")
+            warnings.append(f"Пользователь '{fio}' имеет доступ к опасному сервису {svc} в сегменте {target}")
 
     # 2. Доступ из Guest-сегмента
     guest_segment = None
@@ -28,10 +28,10 @@ def analyze_risks(segments, global_rules, user_rules, segment_equipment):
     if guest_segment:
         for name, src, dst, svc in global_rules:
             if src == guest_segment:
-                warnings.append(f"️ Глобальный доступ из ненадёжного сегмента '{guest_segment}' к {dst} по {svc}")
+                warnings.append(f"️Глобальный доступ из ненадёжного сегмента '{guest_segment}' к {dst} по {svc}")
         for seg, fio, pos, target, svc in user_rules:
             if seg == guest_segment:
-                warnings.append(f"⚠ Пользователь из '{guest_segment}' имеет доступ к {target} по {svc}")
+                warnings.append(f"Пользователь из '{guest_segment}' имеет доступ к {target} по {svc}")
 
     # 3. Отсутствие оборудования в сегменте
     for seg in segments:
