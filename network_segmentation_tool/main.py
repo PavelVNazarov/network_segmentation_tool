@@ -239,9 +239,9 @@ class NetworkSegmentationApp:
         new_btn_frame = ttk.Frame(self.root)
         new_btn_frame.pack(pady=10)
         ttk.Button(new_btn_frame, text="Анализ и отчёт", command=self.analyze).pack(side='left', padx=5)
-        ttk.Button(new_btn_frame, text="Сохранить рисунок сети", command=self.save_diagram).pack(side='left', padx=5)
-        ttk.Button(new_btn_frame, text="Просмотреть схему", command=self.view_diagram).pack(side='left', padx=5)
         ttk.Button(new_btn_frame, text="Сохранить отчёт", command=self.save_report).pack(side='left', padx=5)
+        ttk.Button(new_btn_frame, text="Просмотреть схему", command=self.view_diagram).pack(side='left', padx=5)
+        ttk.Button(new_btn_frame, text="Сохранить рисунок сети", command=self.save_diagram).pack(side='left', padx=5)
         ttk.Button(new_btn_frame, text="Назад", command=self.show_welcome_screen).pack(side='left', padx=5)
 
     def build_global_rules_tab(self):
