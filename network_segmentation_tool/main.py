@@ -5,6 +5,7 @@ from example_data import STANDARD_SEGMENTS, STANDARD_SERVICES, STANDARD_EQUIPMEN
 from validation import validate_subnets, validate_rules, validate_user_rules
 from report_generator import generate_report, generate_risk_report
 from visualizer import draw_and_save_network
+from scenario_manager import ScenarioManager
 import ipaddress
 import platform
 import subprocess
@@ -26,7 +27,17 @@ class NetworkSegmentationApp:
     def __init__(self, root):
         self.root = root
         self.root.title("Автоматизация сегментации ЛВС")
-        self.root.geometry("1050x700")
+        self.root.geometry("1050x700")  # Изменено: уменьшена высота
+        self.manager = ScenarioManager()
+        self.current_scenario = None
+        # --- НОВОЕ: доступные диапазоны ---
+        self.available_networks = {
+            "10.0.0.0/16": ipaddress.ip_network("10.0.0.0/16"),
+            "172.16.0.0/12": ipaddress.ip_network("172.16.0.0/12"),
+            "192.168.0.0/16": ipaddress.ip_network("192.168.0.0/16")
+        }
+        # --- НОВОЕ: начальный базовый диапазон ---
+        self.base_network = self.available_networks["10.0.0.0/16"]
         self.show_welcome_screen()
 
     def create_scrollable_frame(self, parent):
@@ -86,13 +97,25 @@ class NetworkSegmentationApp:
 
         self.build_segments_tab()
 
+        # Добавляем фрейм для кнопок сценариев
+        self.scenario_button_frame = ttk.Frame(self.root)
+        self.scenario_button_frame.pack(pady=5)
+        ttk.Button(self.scenario_button_frame, text="Загрузить сценарий", command=self.load_scenario).pack(side='left', padx=5)
+        ttk.Button(self.scenario_button_frame, text="Сохранить сценарий как...", command=self.save_current_scenario_dialog).pack(side='left', padx=5)
+
+        # Добавляем фрейм для вывода информации о текущем сценарии
+        self.status_frame = ttk.Frame(self.root)
+        self.status_frame.pack(pady=5)
+        self.status_label = ttk.Label(self.status_frame, text="Текущий сценарий: не загружен", foreground="gray")
+        self.status_label.pack()
+
         self.bottom_button_frame = ttk.Frame(self.root)
         self.bottom_button_frame.pack(pady=10)
         ttk.Button(self.bottom_button_frame, text="Сохранить отчёт", command=self.save_report).pack(side='left', padx=5)
         ttk.Button(self.bottom_button_frame, text="Назад", command=self.show_welcome_screen).pack(side='left', padx=5)
 
-        self.output_text = tk.Text(self.root, height=10, wrap='word')
-        self.output_text.pack(fill='both', padx=10, pady=5, expand=True)
+        self.output_text = tk.Text(self.root, height=6, wrap='word')  # Изменено: уменьшена высота
+        self.output_text.pack(fill='both', padx=10, pady=5, expand=True)  # Изменено: уменьшено расстояние сверху
 
     def setup_data(self):
         self.segments = []
@@ -100,10 +123,23 @@ class NetworkSegmentationApp:
         self.global_rules = []
         self.user_rules = []
         self.segment_equipment = {}
-        self.equipment_rows = []  # ← КРИТИЧЕСКИ ВАЖНАЯ СТРОКА
+        self.equipment_rows = []
+        # --- НОВОЕ: список использованных подсетей ---
+        self.used_subnets = set()
 
     def build_segments_tab(self):
         scrollable = self.create_scrollable_frame(self.tab_segments)
+
+        # --- НОВОЕ: фрейм для выбора диапазона ---
+        network_frame = ttk.Frame(scrollable)
+        network_frame.pack(fill='x', pady=5)
+        ttk.Label(network_frame, text="Базовый диапазон:", width=20, anchor='w').pack(side='left', padx=2)
+        self.base_network_combo = ttk.Combobox(network_frame, values=list(self.available_networks.keys()), width=20, state="readonly")
+        self.base_network_combo.pack(side='left', padx=2)
+        self.base_network_combo.set("10.0.0.0/16") # Установка начального значения
+        self.base_network_combo.bind("<<ComboboxSelected>>", self.on_network_change) # Привязка события
+        self.recalculate_subnets_btn = ttk.Button(network_frame, text="Пересчитать подсети", command=self.recalculate_all_subnets)
+        self.recalculate_subnets_btn.pack(side='left', padx=5)
 
         control_frame = ttk.Frame(scrollable)
         control_frame.pack(fill='x', pady=5)
@@ -128,14 +164,24 @@ class NetworkSegmentationApp:
             command=self.try_continue
         )
         continue_btn.pack(pady=15)
-        self.continue_button = continue_btn  # для блокировки
+        self.continue_button = continue_btn
 
-    def add_segment_row(self):
+    def on_network_change(self, event):
+        """Обработчик изменения базового диапазона."""
+        selected_key = self.base_network_combo.get()
+        if selected_key in self.available_networks:
+            self.base_network = self.available_networks[selected_key]
+            # Пересчитываем подсети только если уже есть сегменты
+            if self.segments:
+                self.recalculate_all_subnets()
+
+    def add_segment_row(self, auto_assign_subnet=True):
         row_frame = ttk.Frame(self.segment_container)
         row_frame.pack(fill='x', pady=2)
 
         name_entry = ttk.Entry(row_frame, width=20)
         name_entry.pack(side='left', padx=2)
+
         cidr_entry = ttk.Entry(row_frame, width=20)
         cidr_entry.pack(side='left', padx=2)
 
@@ -144,19 +190,72 @@ class NetworkSegmentationApp:
 
         self.segment_rows.append((row_frame, name_entry, cidr_entry))
 
+        if auto_assign_subnet:
+            next_subnet = self.get_next_available_subnet()
+            if next_subnet:
+                cidr_entry.insert(0, next_subnet)
+                self.used_subnets.add(next_subnet)
+            else:
+                messagebox.showwarning("Предупреждение", "Нет свободных подсетей в выбранном диапазоне")
+
     def remove_segment_row(self, frame):
+        # Найти и удалить соответствующую подсеть из used_subnets
+        for row_frame, _, cidr_ent in self.segment_rows:
+            if row_frame == frame:
+                subnet_to_remove = cidr_ent.get().strip()
+                if subnet_to_remove in self.used_subnets:
+                    self.used_subnets.remove(subnet_to_remove)
+                break
         frame.destroy()
         self.segment_rows = [(f, n, c) for f, n, c in self.segment_rows if f != frame]
 
-    def load_standard_segments(self):
+    def get_next_available_subnet(self):
+        """Возвращает следующую незанятую подсеть /24 из текущего базового диапазона."""
+        # Генерируем все возможные /24 подсети в базовом диапазоне
+        all_possible = list(self.base_network.subnets(new_prefix=24))
+        used = set(self.used_subnets)
+        for net in all_possible:
+            str_net = str(net)
+            if str_net not in used:
+                return str_net
+        return None
+
+    def recalculate_all_subnets(self):
+        """Пересчитывает подсети для всех текущих сегментов на основе выбранного базового диапазона."""
+        # Сначала очищаем список использованных подсетей
+        self.used_subnets.clear()
+
+        # Собираем текущие имена сегментов
+        current_names = []
+        for _, name_ent, _ in self.segment_rows:
+            name = name_ent.get().strip()
+            if name:
+                current_names.append(name)
+
+        # Удаляем все строки
         for frame, _, _ in self.segment_rows:
             frame.destroy()
         self.segment_rows.clear()
 
-        for i, seg in enumerate(STANDARD_SEGMENTS):
-            self.add_segment_row()
+        # Создаем новые строки и присваиваем подсети
+        for name in current_names:
+            self.add_segment_row(auto_assign_subnet=True)
+            # Вставляем имя обратно
+            self.segment_rows[-1][1].insert(0, name)
+
+    def load_standard_segments(self):
+        # Удаляем все строки
+        for frame, _, _ in self.segment_rows:
+            frame.destroy()
+        self.segment_rows.clear()
+
+        # Очищаем использованные подсети
+        self.used_subnets.clear()
+
+        # Добавляем стандартные сегменты, подсети назначаются автоматически
+        for seg in STANDARD_SEGMENTS:
+            self.add_segment_row(auto_assign_subnet=True)
             self.segment_rows[-1][1].insert(0, seg)
-            self.segment_rows[-1][2].insert(0, f"192.168.{i+1}.0/24")
 
     def validate_segment_names_and_subnets(self):
         segments = []
@@ -189,7 +288,6 @@ class NetworkSegmentationApp:
         return segments, subnets, errors
 
     def try_continue(self):
-        # Блокируем кнопку, чтобы избежать двойного нажатия
         self.continue_button.config(state='disabled')
         self.root.update_idletasks()
 
@@ -207,13 +305,11 @@ class NetworkSegmentationApp:
                 self.create_remaining_tabs()
                 self.tabs_created = True
             else:
-                # Обновляем данные в уже созданных вкладках
                 self.update_all_comboboxes()
 
             self.notebook.select(self.tab_global_rules)
 
         finally:
-            # Всегда разблокируем кнопку
             self.continue_button.config(state='normal')
 
     def create_remaining_tabs(self):
@@ -239,9 +335,10 @@ class NetworkSegmentationApp:
         new_btn_frame = ttk.Frame(self.root)
         new_btn_frame.pack(pady=10)
         ttk.Button(new_btn_frame, text="Анализ и отчёт", command=self.analyze).pack(side='left', padx=5)
-        ttk.Button(new_btn_frame, text="Сохранить отчёт", command=self.save_report).pack(side='left', padx=5)
-        ttk.Button(new_btn_frame, text="Просмотреть схему", command=self.view_diagram).pack(side='left', padx=5)
         ttk.Button(new_btn_frame, text="Сохранить рисунок сети", command=self.save_diagram).pack(side='left', padx=5)
+        ttk.Button(new_btn_frame, text="Просмотреть схему", command=self.view_diagram).pack(side='left', padx=5)
+        ttk.Button(new_btn_frame, text="Сохранить отчёт", command=self.save_report).pack(side='left', padx=5)
+        ttk.Button(new_btn_frame, text="Сохранить сценарий", command=self.save_current_scenario).pack(side='left', padx=5)
         ttk.Button(new_btn_frame, text="Назад", command=self.show_welcome_screen).pack(side='left', padx=5)
 
     def build_global_rules_tab(self):
@@ -378,8 +475,9 @@ class NetworkSegmentationApp:
         text = """ИНСТРУКЦИЯ ПО ИСПОЛЬЗОВАНИЮ
 
 1. Вкладка "1. Сегменты и подсети":
-   - Добавьте минимум 2 сегмента.
-   - Укажите подсеть в формате CIDR (например, 192.168.1.0/24).
+   - Выберите базовый диапазон (например, 10.0.0.0/16).
+   - Добавьте сегменты. Подсети будут автоматически назначаться.
+   - Или нажмите "Стандартные" для загрузки типовых сегментов.
    - Нажмите "Продолжить".
 
 2. Вкладка "2. Глобальные правила":
@@ -398,7 +496,9 @@ class NetworkSegmentationApp:
    - "Анализ и отчёт" — проверка модели и генерация текстового отчёта.
    - "Сохранить рисунок сети" — экспорт схемы в PNG или PDF.
    - "Сохранить отчёт" — сохранение текстового отчёта в файл.
-
+   - "Сохранить сценарий" — сохранение текущего сценария в json файл.
+   - "Загрузить сценарий" — загрузка сценария из файла.
+   - "Сохранить сценарий как..." — сохранение с новым именем.
 Примечание: схема отображает сегменты (голубые узлы), оборудование (зелёные), пользователей (розовые) и правила взаимодействия."""
         text_widget = tk.Text(self.tab_instructions, wrap='word', padx=10, pady=10)
         text_widget.insert('1.0', text)
@@ -540,10 +640,199 @@ class NetworkSegmentationApp:
                 f.write(content)
             messagebox.showinfo("Сохранено", f"Отчёт сохранён:\n{path}")
 
+    # --- Новые методы для сценариев ---
+    def load_scenario(self):
+        scenarios = self.manager.list_scenarios()
+        if not scenarios:
+            messagebox.showinfo("Сценарии", "Нет доступных сценариев для загрузки.")
+            return
+
+        # Окно для выбора сценария
+        dialog = tk.Toplevel(self.root)
+        dialog.title("Загрузить сценарий")
+        dialog.geometry("400x200")
+        dialog.transient(self.root)
+        dialog.grab_set()
+
+        ttk.Label(dialog, text="Выберите сценарий:").pack(pady=10)
+
+        combo = ttk.Combobox(dialog, values=scenarios, state="readonly", width=30)
+        combo.pack(pady=5)
+
+        def on_select():
+            name = combo.get()
+            if not name:
+                messagebox.showwarning("Внимание", "Выберите сценарий.")
+                return
+            scenario_data = self.manager.load_scenario(name)
+            if scenario_data:
+                # --- НОВОЕ: Проверка и создание вкладок перед загрузкой ---
+                if not self.tabs_created:
+                    # Валидируем сегменты перед созданием вкладок, если данные корректны
+                    temp_segments = scenario_data.get("segments", [])
+                    temp_subnets = scenario_data.get("subnets", {})
+
+                    # Простая проверка: совпадают ли сегменты и подсети по количеству и формату
+                    if len(temp_segments) >= 2 and len(temp_subnets) == len(temp_segments):
+                        # Присваиваем данные из сценария
+                        self.segments = temp_segments
+                        self.subnets = temp_subnets
+                        # Создаем вкладки
+                        self.create_remaining_tabs()
+                        self.tabs_created = True
+                        # Переключаемся на вкладку правил
+                        self.notebook.select(self.tab_global_rules)
+                    else:
+                        messagebox.showerror("Ошибка", "Некорректные данные в сценарии (сегменты).")
+                        dialog.destroy()
+                        return
+
+                self.apply_scenario_data(scenario_data)
+                self.current_scenario = scenario_data
+                self.status_label.config(text=f"Текущий сценарий: {name}")
+                dialog.destroy()
+                messagebox.showinfo("Загружено", f"Сценарий '{name}' загружен.")
+            else:
+                messagebox.showerror("Ошибка", "Не удалось загрузить сценарий.")
+
+        ttk.Button(dialog, text="Загрузить", command=on_select).pack(pady=10)
+        ttk.Button(dialog, text="Отмена", command=dialog.destroy).pack()
+
+    def apply_scenario_data(self, scenario_data):
+        # --- Проверка на случай, если вкладки не были созданы до загрузки ---
+        if not hasattr(self, 'global_rule_rows'):
+            messagebox.showerror("Ошибка", "Невозможно загрузить сценарий: вкладки не инициализированы.")
+            return
+
+        # Очищаем текущие данные
+        for frame, _, _ in self.segment_rows:
+            frame.destroy()
+        self.segment_rows.clear()
+        self.used_subnets.clear()  # Очищаем использованные подсети
+
+        # Загружаем базовый диапазон
+        base_network_key = scenario_data.get("base_network", "10.0.0.0/16")
+        if base_network_key in self.available_networks:
+            self.base_network = self.available_networks[base_network_key]
+            self.base_network_combo.set(base_network_key)
+        else:
+            # Если в сценарии неизвестный диапазон, используем первый из доступных
+            default_key = list(self.available_networks.keys())[0]
+            self.base_network = self.available_networks[default_key]
+            self.base_network_combo.set(default_key)
+
+        # Загружаем сегменты и подсети
+        self.segments = scenario_data.get("segments", [])
+        self.subnets = scenario_data.get("subnets", {})
+        for seg, cidr in self.subnets.items():
+            self.add_segment_row(auto_assign_subnet=False)  # Не назначать автоматически
+            self.segment_rows[-1][1].insert(0, seg)
+            self.segment_rows[-1][2].insert(0, cidr)
+            # Добавляем загруженную подсеть в список использованных
+            self.used_subnets.add(cidr)
+
+        # Обновляем вкладки, если они уже созданы
+        if self.tabs_created:
+            self.update_all_comboboxes()
+
+        # --- Очищаем и загружаем глобальные правила ---
+        for frame, _, _, _, _ in self.global_rule_rows:
+            frame.destroy()
+        self.global_rule_rows.clear()
+
+        for name, src, dst, svc in scenario_data.get("global_rules", []):
+            self.add_global_rule_row()
+            self.global_rule_rows[-1][1].insert(0, name)
+            self.global_rule_rows[-1][2].set(src)
+            self.global_rule_rows[-1][3].set(dst)
+            self.global_rule_rows[-1][4].set(svc)
+
+        # --- Очищаем и загружаем пользовательские правила ---
+        for frame, _, _, _, _, _ in self.user_rule_rows:
+            frame.destroy()
+        self.user_rule_rows.clear()
+
+        for seg, fio, pos, target, svc in scenario_data.get("user_rules", []):
+            self.add_user_rule_row()
+            self.user_rule_rows[-1][1].set(seg)
+            self.user_rule_rows[-1][2].insert(0, fio)
+            self.user_rule_rows[-1][3].insert(0, pos)
+            self.user_rule_rows[-1][4].set(target)
+            self.user_rule_rows[-1][5].set(svc)
+
+        # --- Очищаем и загружаем оборудование ---
+        for frame, _, _, _ in self.equipment_rows:
+            frame.destroy()
+        self.equipment_rows.clear()
+
+        for seg, eq_dict in scenario_data.get("segment_equipment", {}).items():
+            for eq, count in eq_dict.items():
+                self.add_equipment_row()
+                self.equipment_rows[-1][1].set(seg)
+                self.equipment_rows[-1][2].set(eq)
+                self.equipment_rows[-1][3].set(count)
+
+        # Обновляем список сегментов в combobox'ах
+        self.update_all_comboboxes()
+
+    def save_current_scenario(self):
+        if not self.current_scenario:
+            messagebox.showwarning("Внимание", "Нет текущего сценария для сохранения.")
+            return
+        self.collect_data_for_analysis()
+        name = self.current_scenario.get("name", "Безымянный")
+        self.current_scenario.update(self.get_current_data())
+        filename = self.manager.save_scenario(self.current_scenario, name)
+        messagebox.showinfo("Сохранено", f"Сценарий '{name}' обновлён в {filename}.")
+
+    def save_current_scenario_dialog(self):
+        self.collect_data_for_analysis()
+        current_data = self.get_current_data()
+
+        dialog = tk.Toplevel(self.root)
+        dialog.title("Сохранить сценарий как...")
+        dialog.geometry("400x150")
+        dialog.transient(self.root)
+        dialog.grab_set()
+
+        ttk.Label(dialog, text="Введите имя сценария:").pack(pady=10)
+        entry = ttk.Entry(dialog, width=30)
+        entry.pack(pady=5)
+
+        def on_save():
+            name = entry.get().strip()
+            if not name:
+                messagebox.showwarning("Внимание", "Введите имя сценария.")
+                return
+            filename = self.manager.save_scenario(current_data, name)
+            self.current_scenario = current_data
+            self.current_scenario["name"] = name
+            self.status_label.config(text=f"Текущий сценарий: {name}")
+            dialog.destroy()
+            messagebox.showinfo("Сохранено", f"Сценарий '{name}' сохранён в {filename}.")
+
+        ttk.Button(dialog, text="Сохранить", command=on_save).pack(pady=10)
+        ttk.Button(dialog, text="Отмена", command=dialog.destroy).pack()
+
+    def get_current_data(self):
+        self.collect_data_for_analysis()
+        # Включаем текущий базовый диапазон в данные
+        base_network_key = None
+        for key, net in self.available_networks.items():
+            if net == self.base_network:
+                base_network_key = key
+                break
+        return {
+            "segments": self.segments,
+            "subnets": self.subnets,
+            "global_rules": self.global_rules,
+            "user_rules": self.user_rules,
+            "segment_equipment": self.segment_equipment,
+            "base_network": base_network_key  # Сохраняем ключ, а не объект
+        }
+    # --- Конец новых методов ---
 
 if __name__ == "__main__":
     root = tk.Tk()
     app = NetworkSegmentationApp(root)
     root.mainloop()
-
-

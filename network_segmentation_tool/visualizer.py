@@ -6,16 +6,6 @@ import os
 import math
 from tkinter import filedialog
 import tkinter as tk
-import sys
-
-def get_resource_path(relative_path):
-    """Получить путь к ресурсу, работает как в IDE, так и в PyInstaller"""
-    try:
-        # PyInstaller создает временную папку _MEIPASS
-        base_path = sys._MEIPASS
-    except Exception:
-        base_path = os.path.abspath(".")
-    return os.path.join(base_path, relative_path)
 
 def generate_grid_positions(n, center_x, center_y, spacing=0.6):
     """Генерирует координаты для n элементов в сетке 3x3 (или больше)."""
@@ -32,7 +22,7 @@ def generate_grid_positions(n, center_x, center_y, spacing=0.6):
         positions.append((x, y))
     return positions
 
-ICONS_DIR = get_resource_path("icons")
+ICONS_DIR = os.path.join(os.path.dirname(__file__), "icons")
 
 EQUIPMENT_ICONS = {
     "Firewall": "firewall.png",
@@ -151,7 +141,7 @@ def draw_and_save_network(segments, global_rules, user_rules, segment_equipment,
         G.add_edge(user_id, target, rule_type='user', label=svc)
 
     # --- Расположение узлов ---
-    seg_layout = nx.circular_layout(segments, scale=4.0)
+    seg_layout = nx.spring_layout(G.subgraph(segments), k=3, iterations=50, scale=4.0)
     for seg in segments:
         pos[seg] = seg_layout[seg]
 
@@ -166,19 +156,19 @@ def draw_and_save_network(segments, global_rules, user_rules, segment_equipment,
     for seg, node_names in equipment_by_segment.items():
         if seg in pos:
             base_x, base_y = pos[seg]
-            # Ограничение: максимум 16 иконок (4x4)
+            # Смещаем центр сетки оборудования немного вверх
+            grid_center_y = base_y + 0.3
             display_count = min(len(node_names), 16)
-            positions = generate_grid_positions(display_count, base_x, base_y, spacing=0.75)
+            positions = generate_grid_positions(display_count, base_x, grid_center_y, spacing=0.75)
             for i, node_name in enumerate(node_names[:display_count]):
                 x, y = positions[i]
                 pos[node_name] = (x, y)
-            # Остальные иконки — не рисуем, но запоминаем для метки "+N"
             if len(node_names) > 16:
-                # Создадим фиктивный узел для метки "+N" (позиция — последняя иконка)
                 last_x, last_y = positions[-1]
                 extra_label_node = f"{seg}:extra_{eq_type}"
-                G.add_node(extra_label_node, type='extra_label', segment=seg, equipment_type=eq_type, count=len(node_names)-16)
-                pos[extra_label_node] = (last_x + 0.3, last_y)  # немного справа от последней иконки
+                G.add_node(extra_label_node, type='extra_label', segment=seg, equipment_type=eq_type,
+                           count=len(node_names) - 16)
+                pos[extra_label_node] = (last_x + 0.3, last_y)
 
     # Пользователи в сетке внутри сегментов (ограничено 4x4)
     users_by_segment = {}
@@ -190,15 +180,17 @@ def draw_and_save_network(segments, global_rules, user_rules, segment_equipment,
     for seg, user_ids in users_by_segment.items():
         if seg in pos:
             base_x, base_y = pos[seg]
+            # Смещаем центр сетки пользователей немного вниз
+            grid_center_y = base_y - 0.3
             display_count = min(len(user_ids), 16)
-            positions = generate_grid_positions(display_count, base_x, base_y, spacing=0.85)
+            positions = generate_grid_positions(display_count, base_x, grid_center_y, spacing=0.85)
             for i, user_id in enumerate(user_ids[:display_count]):
                 x, y = positions[i]
                 pos[user_id] = (x, y)
             if len(user_ids) > 16:
                 last_x, last_y = positions[-1]
                 extra_label_node = f"{seg}:extra_user"
-                G.add_node(extra_label_node, type='extra_label', segment=seg, count=len(user_ids)-16)
+                G.add_node(extra_label_node, type='extra_label', segment=seg, count=len(user_ids) - 16)
                 pos[extra_label_node] = (last_x + 0.3, last_y)
 
     # --- Автоматический масштаб ---
@@ -358,4 +350,3 @@ def draw_and_save_network(segments, global_rules, user_rules, segment_equipment,
     else:
         plt.close(fig)
         return None
-
